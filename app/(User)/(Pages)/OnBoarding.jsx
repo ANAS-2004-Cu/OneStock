@@ -17,17 +17,11 @@ const slides = [
   {
     id: '2',
     image: require('../../../assets/images/easy.png'),
-    title: 'Shop with ease',
-    subtitle: 'Discover thousands of products in one place and order with just a click',
+    title: 'Easy Shopping, Fast Delivery',
+    subtitle: 'Order your favorite products with a single click and enjoy lightning-fast delivery to your door',
   },
   {
     id: '3',
-    image: require('../../../assets/images/delivery.png'),
-    title: 'Fast delivery',
-    subtitle: 'We deliver your order quickly and safely to your doorstep',
-  },
-  {
-    id: '4',
     image: require('../../../assets/images/payment.png'),
     title: 'Secure payment',
     subtitle: 'Various and secure payment options for your convenience',
