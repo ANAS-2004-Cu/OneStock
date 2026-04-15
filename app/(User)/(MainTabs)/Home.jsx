@@ -888,9 +888,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
   },
   adBannerImage: {
-    width: '100%',
-    height: undefined,
-    aspectRatio: 2.5,
+    width: '90%',
+    height: '100%',
+    aspectRatio: 4.8,
     borderRadius: 10,
   },
   adBannerContentContainer: {

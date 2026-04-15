@@ -25,6 +25,7 @@ import {
   startAt,
   updateDoc,
   where,
+  writeBatch,
 } from "firebase/firestore";
 import { auth, db } from './MAINAPI';
 
@@ -535,8 +536,22 @@ export const getProductsByIds = async (ids: string[]): Promise<{
   return results;
 };
 
+const getEffectivePriceValue = (data: Record<string, any>): number => {
+  const effective = Number(data?.effectivePrice);
+  if (Number.isFinite(effective)) {
+    return effective;
+  }
+
+  const price = Number(data?.price) || 0;
+  const discount = Number(data?.discount) || 0;
+  return Math.floor(price - (price * discount) / 100);
+};
+
+export type ProductOrderField = "name" | "effectivePrice";
+export type ProductOrderDirection = "asc" | "desc";
+
 export interface ProductsPageCursor {
-  name: string;
+  primaryValue: string | number;
   id: string;
 }
 
@@ -572,7 +587,7 @@ export interface SearchProductsPageResult {
   hasMore: boolean;
 }
 
-export type FilteredProductsPageCursor = string | null;
+export type FilteredProductsPageCursor = ProductsPageCursor | null;
 
 export interface FilteredProductsPageResult {
   items: {
@@ -593,24 +608,90 @@ export interface ProductSuggestionsResult {
   items: { name: string }[];
 }
 
+export interface EffectivePriceBackfillResult {
+  success: boolean;
+  scanned: number;
+  updated: number;
+  error?: string;
+}
+
+/**
+ * Backfill / normalize `effectivePrice` for products.
+ * This should be run from an admin-only flow or one-time script.
+ */
+export const backfillProductsEffectivePrice = async (pageSize = 200): Promise<EffectivePriceBackfillResult> => {
+  const batchSize = typeof pageSize === "number" && pageSize > 0 ? Math.min(pageSize, 500) : 200;
+  let scanned = 0;
+  let updated = 0;
+  let cursor: DocumentSnapshot<DocumentData> | null = null;
+
+  try {
+    while (true) {
+      const constraints: any[] = [orderBy(documentId()), limit(batchSize)];
+      if (cursor) {
+        constraints.push(startAfter(cursor));
+      }
+
+      const snapshot = await getDocs(query(collection(db, "products"), ...constraints));
+      if (snapshot.empty) {
+        break;
+      }
+
+      const batch = writeBatch(db);
+      let batchHasWrites = false;
+
+      snapshot.docs.forEach((docSnap) => {
+        scanned += 1;
+        const data = (docSnap.data() || {}) as Record<string, any>;
+        const nextEffectivePrice = getEffectivePriceValue(data);
+        const currentEffectivePrice = Number(data?.effectivePrice);
+
+        if (!Number.isFinite(currentEffectivePrice) || currentEffectivePrice !== nextEffectivePrice) {
+          batch.update(doc(db, "products", docSnap.id), { effectivePrice: nextEffectivePrice });
+          updated += 1;
+          batchHasWrites = true;
+        }
+      });
+
+      if (batchHasWrites) {
+        await batch.commit();
+      }
+
+      cursor = snapshot.docs[snapshot.docs.length - 1] || null;
+      if (snapshot.docs.length < batchSize) {
+        break;
+      }
+    }
+
+    return { success: true, scanned, updated };
+  } catch (error: any) {
+    return {
+      success: false,
+      scanned,
+      updated,
+      error: error?.message || "Failed to backfill effectivePrice",
+    };
+  }
+};
+
 export const getProductsPage = async (options: {
   limit?: number;
-  orderBy?: string;
-  orderDirection?: "asc" | "desc";
+  orderBy?: ProductOrderField;
+  orderDirection?: ProductOrderDirection;
   cursor?: ProductsPageCursor | null;
 }): Promise<ProductsPageResult> => {
   const pageSize = typeof options.limit === "number" && options.limit > 0 ? options.limit : 20;
-  const orderField = options.orderBy || "name";
+  const orderField: ProductOrderField = options.orderBy || "name";
   const orderDir = options.orderDirection || "asc";
 
   let q = query(
     collection(db, "products"),
     orderBy(orderField, orderDir),
-    orderBy(documentId())
+    orderBy(documentId(), orderDir)
   );
 
   if (options.cursor) {
-    q = query(q, startAfter(options.cursor.name || "", options.cursor.id || ""));
+    q = query(q, startAfter(options.cursor.primaryValue, options.cursor.id));
   }
 
   q = query(q, limit(pageSize));
@@ -633,8 +714,17 @@ export const getProductsPage = async (options: {
     };
   });
 
-  const lastDoc = docs[docs.length - 1];
-  const nextCursor = lastDoc ? { name: (lastDoc.data() || {}).name || "", id: lastDoc.id } : null;
+  const lastDoc = docs[docs.length - 1] || null;
+  const lastDocData = (lastDoc?.data() || {}) as Record<string, any>;
+  const rawPrimaryValue = lastDocData[orderField];
+  const nextPrimaryValue = typeof rawPrimaryValue === "number" || typeof rawPrimaryValue === "string"
+    ? rawPrimaryValue
+    : orderField === "effectivePrice"
+      ? getEffectivePriceValue(lastDocData)
+      : "";
+  const nextCursor = lastDoc
+    ? { primaryValue: nextPrimaryValue, id: lastDoc.id }
+    : null;
 
   return {
     items,
@@ -649,6 +739,8 @@ export const getFilteredProductsPage = async (options: {
   category?: string | null;
   priceMin?: number | null;
   priceMax?: number | null;
+  orderBy?: ProductOrderField;
+  orderDirection?: ProductOrderDirection;
 }): Promise<FilteredProductsPageResult> => {
   const pageSize = typeof options.limit === "number" && options.limit > 0 ? options.limit : 20;
 
@@ -660,19 +752,22 @@ export const getFilteredProductsPage = async (options: {
 
   const hasPriceMin = typeof options.priceMin === "number";
   const hasPriceMax = typeof options.priceMax === "number";
+  const orderField: ProductOrderField = options.orderBy || (hasPriceMin || hasPriceMax ? "effectivePrice" : "name");
+  const orderDir: ProductOrderDirection = options.orderDirection || "asc";
 
   if (hasPriceMin) {
-    constraints.push(where("price", ">=", options.priceMin as number));
+    constraints.push(where("effectivePrice", ">=", options.priceMin as number));
   }
 
   if (hasPriceMax) {
-    constraints.push(where("price", "<=", options.priceMax as number));
+    constraints.push(where("effectivePrice", "<=", options.priceMax as number));
   }
 
-  constraints.push(orderBy(documentId()));
+  constraints.push(orderBy(orderField, orderDir));
+  constraints.push(orderBy(documentId(), orderDir));
 
   if (options.cursor) {
-    constraints.push(startAfter(options.cursor));
+    constraints.push(startAfter(options.cursor.primaryValue, options.cursor.id));
   }
 
   constraints.push(limit(pageSize));
@@ -696,7 +791,16 @@ export const getFilteredProductsPage = async (options: {
   });
 
   const lastDoc = docs[docs.length - 1] || null;
-  const nextCursor = lastDoc ? lastDoc.id : null;
+  const lastDocData = (lastDoc?.data() || {}) as Record<string, any>;
+  const rawPrimaryValue = lastDocData[orderField];
+  const nextPrimaryValue = typeof rawPrimaryValue === "number" || typeof rawPrimaryValue === "string"
+    ? rawPrimaryValue
+    : orderField === "effectivePrice"
+      ? getEffectivePriceValue(lastDocData)
+      : "";
+  const nextCursor = lastDoc
+    ? { primaryValue: nextPrimaryValue, id: lastDoc.id }
+    : null;
 
   return {
     items,

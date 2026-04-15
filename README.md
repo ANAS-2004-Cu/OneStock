@@ -48,3 +48,32 @@ Join our community of developers creating universal apps.
 
 - [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
 - [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+
+## Product Filtering And Sorting Notes
+
+The products query flow now supports global server-side sorting and pagination using a derived field:
+
+- `effectivePrice` (price after discount)
+- Cursor shape: `{ primaryValue, id }`
+- Default pagination limit remains `20`
+
+### Required Migration
+
+Existing product documents should be backfilled with `effectivePrice`.
+
+Use the helper:
+
+- `backfillProductsEffectivePrice` in `Backend/Firebase/DBAPI.tsx`
+
+Run it from an admin-only maintenance flow or a controlled one-time script.
+
+### Required Firestore Composite Indexes
+
+Create the following indexes for `products` collection (direction `ASC` and mirrored `DESC` when needed):
+
+1. `category`, `effectivePrice`, `__name__`
+2. `effectivePrice`, `__name__`
+3. `name`, `__name__`
+4. `category`, `name`, `__name__`
+
+Without these indexes, Firestore may throw `FAILED_PRECONDITION` for filtered/sorted queries.

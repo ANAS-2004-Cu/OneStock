@@ -3,17 +3,17 @@ import { useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FlatList, RefreshControl, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Icon from "react-native-vector-icons/Feather";
-import MiniAlert from '../../../Components/GeneralComponents/MiniAlert';
 import {
-    getFilteredProductsPage,
-    getProductsByIds,
-    getProductsPage,
-    getSearchProductsPage,
+  getFilteredProductsPage,
+  getProductsByIds,
+  getProductsPage,
+  getSearchProductsPage,
 } from '../../../Backend/Firebase/DBAPI.tsx';
+import MiniAlert from '../../../Components/GeneralComponents/MiniAlert';
+import FilterModal from '../../../Components/UserComponents/FilterModal';
+import ProductCard from '../../../Components/UserComponents/ProductCard';
 import { darkTheme as cardDarkTheme, lightTheme as cardLightTheme } from '../../../Theme/Component/ProductCardTheme.js';
 import { darkTheme, lightTheme } from '../../../Theme/Tabs/ProductsTheme.js';
-import ProductCard from '../../../Components/UserComponents/ProductCard';
-import FilterModal from '../../../Components/UserComponents/FilterModal';
 
 const ProductList = () => {
   const params = useLocalSearchParams();
@@ -45,12 +45,6 @@ const ProductList = () => {
   const listRef = useRef(null);
   const requestVersionRef = useRef(0);
 
-  const applyDiscount = (price, discount = 0) => {
-    const priceNum = Number(price) || 0;
-    const discountNum = Number(discount) || 0;
-    return Math.floor(priceNum - (priceNum * discountNum) / 100);
-  };
-
   const isSearchMode = Boolean(intent.search && String(intent.search).trim().length > 0);
   const isCuratedMode = !isSearchMode && (intent.type === 'TopSelling' || intent.type === 'NewArrival' || intent.type === 'topSelling' || intent.type === 'newArrival');
   const activeCategory = intent.category && intent.category !== 'All' ? intent.category : null;
@@ -67,14 +61,25 @@ const ProductList = () => {
       case 'name_asc':
         return { field: 'name', direction: 'asc' };
       case 'name_desc':
-        return { field: 'name', direction: 'asc' }; // Firestore stays asc; desc handled client-side
+        return { field: 'name', direction: 'desc' };
       case 'price_asc':
-        return { field: 'price', direction: 'asc' };
+        return { field: 'effectivePrice', direction: 'asc' };
       case 'price_desc':
-        return { field: 'price', direction: 'asc' }; // Firestore stays asc; desc handled client-side
+        return { field: 'effectivePrice', direction: 'desc' };
       default:
         return null;
     }
+  };
+
+  const getClientEffectivePrice = (item) => {
+    const normalizedEffective = Number(item?.effectivePrice);
+    if (Number.isFinite(normalizedEffective)) {
+      return normalizedEffective;
+    }
+
+    const priceNum = Number(item?.price) || 0;
+    const discountNum = Number(item?.discount) || 0;
+    return Math.floor(priceNum - (priceNum * discountNum) / 100);
   };
 
   const sortLocal = (list) => {
@@ -85,46 +90,24 @@ const ProductList = () => {
       case 'name_desc':
         return sorted.sort((a, b) => b.name.localeCompare(a.name));
       case 'price_asc':
-        return sorted.sort((a, b) => {
-          const effectiveA = applyDiscount(a.price, a.discount);
-          const effectiveB = applyDiscount(b.price, b.discount);
-          return effectiveA - effectiveB;
-        });
+        return sorted.sort((a, b) => getClientEffectivePrice(a) - getClientEffectivePrice(b));
       case 'price_desc':
-        return sorted.sort((a, b) => {
-          const effectiveA = applyDiscount(a.price, a.discount);
-          const effectiveB = applyDiscount(b.price, b.discount);
-          return effectiveB - effectiveA;
-        });
+        return sorted.sort((a, b) => getClientEffectivePrice(b) - getClientEffectivePrice(a));
       default:
         return sorted;
     }
   };
 
   const applyIntentFilters = (list) => {
-    let filtered = list;
-
-    if (isSearchMode) {
-      const needle = intent.search.trim().toLowerCase();
-      filtered = filtered.filter(item => item?.name?.toLowerCase().includes(needle));
+    if (!isCuratedMode) {
+      return list;
     }
 
-    if (activeCategory && !isCuratedMode) {
-      filtered = filtered.filter(item => item?.category === activeCategory);
+    if (!intent.sort) {
+      return list;
     }
 
-    const min = intent.priceRange?.min;
-    const max = intent.priceRange?.max;
-    if (min !== null || max !== null) {
-      filtered = filtered.filter(item => {
-        const price = applyDiscount(item.price, item.discount);
-        const aboveMin = min === null || price >= min;
-        const belowMax = max === null || price <= max;
-        return aboveMin && belowMax;
-      });
-    }
-    if (intent.sort === null) { return filtered; }
-    else { return sortLocal(filtered); }
+    return sortLocal(list);
   };
 
   const fetchCuratedProducts = async (cursorArg = 0, requestVersion = requestVersionRef.current) => {
@@ -178,11 +161,12 @@ const ProductList = () => {
 
   const fetchFilteredProducts = async (cursorArg = null, requestVersion = requestVersionRef.current) => {
     const order = mapSortToOrder();
-    const orderField = priceFilterApplied ? 'price' : (order?.field || 'name');
+    const orderField = order?.field || 'name';
+    const orderDirection = order?.direction || 'asc';
     const result = await getFilteredProductsPage({
       limit: pageSize,
       orderBy: orderField,
-      orderDirection: 'asc',
+      orderDirection,
       cursor: cursorArg,
       category: activeCategory || null,
       priceMin: intent.priceRange?.min ?? null,
@@ -411,13 +395,13 @@ const ProductList = () => {
     }
   };
 
-  const filteredProducts = applyIntentFilters(products);
+  const displayedProducts = applyIntentFilters(products);
 
   const displayTitle = isSearchMode
-    ? `Search (${filteredProducts.length})`
+    ? `Search (${displayedProducts.length})`
     : isCuratedMode
-      ? `${(intent.type === 'TopSelling' || intent.type === 'topSelling') ? 'Top Selling' : 'New Arrival'} (${filteredProducts.length})`
-      : `All Products (${filteredProducts.length})`;
+      ? `${(intent.type === 'TopSelling' || intent.type === 'topSelling') ? 'Top Selling' : 'New Arrival'} (${displayedProducts.length})`
+      : `All Products (${displayedProducts.length})`;
 
   return (
     <View style={styles(theme).container}>
@@ -462,7 +446,7 @@ const ProductList = () => {
 
       <FlatList
         ref={listRef}
-        data={filteredProducts}
+        data={displayedProducts}
         keyExtractor={item => item.id}
         extraData={themeVersion}
         renderItem={({ item }) => (

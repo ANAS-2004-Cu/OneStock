@@ -4,9 +4,9 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { ActivityIndicator, Dimensions, Linking, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import Icon from 'react-native-vector-icons/FontAwesome';
-import MiniAlert from '../../Components/GeneralComponents/MiniAlert';
 import { getUserData, signIn } from '../../Backend/Firebase/DBAPI';
 import { useUserStore } from '../../Backend/Zustand/UserStore';
+import MiniAlert from '../../Components/GeneralComponents/MiniAlert';
 import { darkTheme, lightTheme } from '../../Theme/Auth/LoginTheme';
 
 const Login = () => {
@@ -72,21 +72,18 @@ const Login = () => {
 
       if (result.success) {
         const userId = result.userId;
-        await AsyncStorage.setItem('LoginID', userId);
         const userData = await getUserData(userId);
 
         if (userData) {
-          useUserStore.getState().login(userData);
-          // Sync preferred categories to cache on login
-          if (userData?.isAdmin === true) {
-            // router.replace('../Admin/Admintabs/Admin');
-            router.replace('../(User)/(MainTabs)/Home');
-          }
-          else if (userData?.isBlocked === true) {
+          // Check if account is blocked before saving
+          if (userData?.isBlocked === true) {
             showAlert('This Account is Blocked , Contact With Customer Service', 'error');
             setShowCustomerService(true);
           }
           else {
+            // Only save and login if account is not blocked
+            await AsyncStorage.setItem('LoginID', userId);
+            useUserStore.getState().login(userData);
             router.replace('../(User)/(MainTabs)/Home');
           }
         } else {

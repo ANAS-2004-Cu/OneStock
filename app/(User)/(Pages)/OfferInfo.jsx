@@ -3,7 +3,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Stack, useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import {
-    ActivityIndicator,
     Dimensions,
     Image,
     ScrollView,
@@ -22,7 +21,8 @@ const AdDetailScreen = () => {
     const router = useRouter();
     const [theme, setTheme] = useState(lightTheme);
     const [themeVersion, setThemeVersion] = useState(0);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(false);
+    const [imageError, setImageError] = useState(false);
     const [imageAspectRatio, setImageAspectRatio] = useState(1);
     const windowWidth = Dimensions.get('window').width;
 
@@ -31,9 +31,13 @@ const AdDetailScreen = () => {
         try {
             if (image) {
                 setDecodedImage(decodeURIComponent(image));
+                setLoading(false);
+                setImageError(false);
             }
         } catch (error) {
             console.log("Error decoding image URI:", error);
+            setImageError(true);
+            setLoading(false);
         }
 
         try {
@@ -55,7 +59,8 @@ const AdDetailScreen = () => {
                 },
                 (error) => {
                     console.log("Error getting image size:", error);
-                    setImageAspectRatio(16 / 9); // Default aspect ratio if we can't get the actual one
+                    setImageAspectRatio(16 / 9);
+                    setImageError(true);
                 }
             );
         }
@@ -85,6 +90,18 @@ const AdDetailScreen = () => {
     }, []);
 
     useFocusEffect(checkTheme);
+
+    // Timeout to prevent infinite loading
+    useEffect(() => {
+        if (loading) {
+            const loadingTimeout = setTimeout(() => {
+                setLoading(false);
+                console.warn("Image loading timeout - forcing stop");
+            }, 5000); // 5 second timeout
+
+            return () => clearTimeout(loadingTimeout);
+        }
+    }, [loading]);
 
     // Calculate image height based on screen width and image aspect ratio
     const imageHeight = windowWidth / imageAspectRatio;
@@ -125,26 +142,22 @@ const AdDetailScreen = () => {
                     styles.imageContainer,
                     { height: decodedImage ? Math.min(500, Math.max(200, imageHeight)) : 200 }
                 ]}>
-                    {decodedImage ? (
-                        <>
-                            <Image
-                                source={{ uri: decodedImage }}
-                                style={styles.adImage}
-                                onLoadStart={() => setLoading(true)}
-                                onLoadEnd={() => setLoading(false)}
-                                resizeMode="contain"
-                            />
-                            {loading && (
-                                <View style={styles.loadingOverlay}>
-                                    <ActivityIndicator size="large" color={theme.loadingIndicator} />
-                                </View>
-                            )}
-                        </>
+                    {decodedImage && !imageError ? (
+                        <Image
+                            source={{ uri: decodedImage }}
+                            style={styles.adImage}
+                            onError={(error) => {
+                                console.log("Error loading image:", error);
+                                setImageError(true);
+                                setLoading(false);
+                            }}
+                            resizeMode="contain"
+                        />
                     ) : (
                         <View style={[styles.noImageContainer, { backgroundColor: theme.cardBackground }]}>
                             <Icon name="image" size={50} color={theme.placeholderText} />
                             <Text style={[styles.noImageText, { color: theme.placeholderText }]}>
-                                Image not available
+                                {imageError ? "خطأ في تحميل الصورة" : "الصورة غير متاحة"}
                             </Text>
                         </View>
                     )}

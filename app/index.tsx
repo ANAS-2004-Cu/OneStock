@@ -17,12 +17,7 @@ const Index = () => {
           await AsyncStorage.setItem('UpadtingManageDocs', JSON.stringify(manageResponse.UpadtingManageDocs));
           await useUserStore.getState().bootstrapAuth();
           const { isLoggedIn } = useUserStore.getState();
-
-          if (isLoggedIn) {
             router.replace('./Home');
-          } else {
-            router.replace('./Home');
-          }
         } catch (_error) {
           Alert.alert('Error', 'A connection error occurred. Please try again later.', [{ text: 'OK', onPress: () => BackHandler.exitApp() }], { cancelable: false });
         }
